@@ -1,5 +1,5 @@
 //
-//  TransitionAnimator.swift
+//  SideMenuController+SideUnder.swift
 //
 //  Copyright (c) 2015 Teodor Patraş
 //
@@ -21,61 +21,165 @@
 //  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 //  SOFTWARE.
 
-import Foundation
-
-/**
- *  Protocol for defining custom animations for when switching the center view controller.
- *  By the time this method is called, the view of the new center view controller has been
- *  added to the center panel and resized. You only need to implement a custom animation.
- */
-public protocol TransitionAnimatable {
-    static func performTransition(forView view: UIView, completion:  @escaping () -> Void)
-}
-
-
-public struct FadeAnimator: TransitionAnimatable {
+// MARK: - Extension for implementing the specific functionality for when side panel is positioned under the center
+extension SideMenuController {
     
-    public static func performTransition(forView view: UIView, completion: @escaping () -> Void) {
-        CATransaction.begin()
-        CATransaction.setCompletionBlock(completion)
-        let fadeAnimation = CABasicAnimation(keyPath: "opacity")
-        fadeAnimation.duration = 0.35
-        fadeAnimation.fromValue = 0
-        fadeAnimation.toValue = 1
-        fadeAnimation.fillMode = CAMediaTimingFillMode.forwards
-        fadeAnimation.isRemovedOnCompletion = true
-        view.layer.add(fadeAnimation, forKey: "fade")
-        CATransaction.commit()
+    // MARK: - Methods -
+    
+    func configureGestureRecognizersForPositionUnder() {
+        
+        let panLeft = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleCenterPanelPanLeft))
+        panLeft.edges = .left
+        panLeft.delegate = self
+        
+        let panRight = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleCenterPanelPanRight))
+        panRight.edges = .right
+        panRight.delegate = self
+        
+        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tapRecognizer.delegate = self
+        
+        let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handleCenterPanelPan))
+        panGesture.delegate = self
+        
+        centerPanel.addGestureRecognizer(panLeft)
+        centerPanel.addGestureRecognizer(panRight)
+        centerPanel.addGestureRecognizer(tapRecognizer)
     }
-}
-
-public struct CircleMaskAnimator: TransitionAnimatable {
     
-    public static func performTransition(forView view: UIView, completion: @escaping () -> Void) {
-        CATransaction.begin()
-        CATransaction.setCompletionBlock(completion)
+    @objc @inline(__always) func handleCenterPanelPanLeft(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        handleCenterPanelPan(gesture)
+    }
+    
+    @objc @inline(__always) func handleCenterPanelPanRight(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        handleCenterPanelPan(gesture)
+    }
+    
+    func setSideShadow(hidden: Bool) {
         
-        let screenSize = UIScreen.main.bounds.size
-        let dim = max(screenSize.width, screenSize.height)
-        let circleDiameter : CGFloat = 50.0
-        let circleFrame = CGRect(x: (screenSize.width - circleDiameter) / 2, y: (screenSize.height - circleDiameter) / 2, width: circleDiameter, height: circleDiameter)
-        let circleCenter = CGPoint(x: circleFrame.origin.x + circleDiameter / 2, y: circleFrame.origin.y + circleDiameter / 2)
+        guard _preferences.drawing.centerPanelShadow else {
+            return
+        }
         
-        let circleMaskPathInitial = UIBezierPath(ovalIn: circleFrame)
-        let extremePoint = CGPoint(x: circleCenter.x - dim, y: circleCenter.y - dim)
-        let radius = sqrt((extremePoint.x * extremePoint.x) + (extremePoint.y * extremePoint.y))
-        let circleMaskPathFinal = UIBezierPath(ovalIn: circleFrame.insetBy(dx: -radius, dy: -radius))
+        if hidden {
+            centerPanel.layer.shadowOpacity = 0.0
+        } else {
+            centerPanel.layer.shadowOpacity = 0.8
+        }
+    }
+    
+    func setUnderSidePanel(hidden: Bool, completion: ((Bool) -> ())? = nil) {
         
-        let maskLayer = CAShapeLayer()
-        maskLayer.path = circleMaskPathFinal.cgPath
-        view.layer.mask = maskLayer
+        var centerPanelFrame = centerPanel.frame
         
-        let maskLayerAnimation = CABasicAnimation(keyPath: "path")
-        maskLayerAnimation.fromValue = circleMaskPathInitial.cgPath
-        maskLayerAnimation.toValue = circleMaskPathFinal.cgPath
-        maskLayerAnimation.duration = 0.6
+        if !hidden {
+            if sidePanelPosition.isPositionedLeft {
+                centerPanelFrame.origin.x = sidePanel.frame.maxX
+            }else{
+                centerPanelFrame.origin.x = sidePanel.frame.minX - centerPanel.frame.width
+            }
+        } else {
+            centerPanelFrame.origin = CGPoint.zero
+        }
         
-        view.layer.mask?.add(maskLayerAnimation, forKey: "circleMask")
-        CATransaction.commit()
+        var duration = hidden ? _preferences.animating.hideDuration : _preferences.animating.reavealDuration
+        
+        if abs(flickVelocity) > 0 {
+            let newDuration = TimeInterval(sidePanel.frame.size.width / abs(flickVelocity))
+            flickVelocity = 0
+            duration = min(newDuration, duration)
+        }
+        
+        let updated = centerPanel.frame != centerPanelFrame
+        
+        UIView.panelAnimation( duration, animations: { 
+            self.centerPanel.frame = centerPanelFrame
+            self.set(statusUnderlayAlpha: hidden ? 0 : 1)
+        }) { 
+            if hidden {
+                self.setSideShadow(hidden: hidden)
+            }
+            completion?(updated)
+        }
+    }
+    
+    @objc func handleCenterPanelPan(_ recognizer: UIPanGestureRecognizer){
+        
+        guard canDisplaySideController else {
+            return
+        }
+        
+        self.flickVelocity = recognizer.velocity(in: recognizer.view).x
+        let leftToRight = flickVelocity > 0
+        
+        switch(recognizer.state) {
+            
+        case .began:
+            if !sidePanelVisible {
+                sidePanelVisible = true
+                prepare(sidePanelForDisplay: true)
+                setSideShadow(hidden: false)
+            }
+            
+            set(statusBarHidden: true)
+            
+        case .changed:
+            let translation = recognizer.translation(in: view).x
+            let sidePanelFrame = sidePanel.frame
+            
+            // origin.x or origin.x + width
+            let xPoint: CGFloat = centerPanel.center.x + translation +
+                (sidePanelPosition.isPositionedLeft ? -1  : 1 ) * centerPanel.frame.width / 2
+            
+            
+            if xPoint < sidePanelFrame.minX || xPoint > sidePanelFrame.maxX{
+                return
+            }
+            
+            var alpha: CGFloat
+            
+            if sidePanelPosition.isPositionedLeft {
+                alpha = xPoint / sidePanelFrame.width
+            }else{
+                alpha = 1 - (xPoint - sidePanelFrame.minX) / sidePanelFrame.width
+            }
+            
+            set(statusUnderlayAlpha: alpha)
+            var frame = centerPanel.frame
+            frame.origin.x += translation
+            centerPanel.frame = frame
+            recognizer.setTranslation(CGPoint.zero, in: view)
+            
+        default:
+            if sidePanelVisible {
+                
+                var reveal = true
+                let centerFrame = centerPanel.frame
+                let sideFrame = sidePanel.frame
+                
+                let shouldOpenPercentage = CGFloat(0.2)
+                let shouldHidePercentage = CGFloat(0.8)
+                
+                if sidePanelPosition.isPositionedLeft {
+                    if leftToRight {
+                        // opening
+                        reveal = centerFrame.minX > sideFrame.width * shouldOpenPercentage
+                    } else{
+                        // closing
+                        reveal = centerFrame.minX > sideFrame.width * shouldHidePercentage
+                    }
+                }else{
+                    if leftToRight {
+                        //closing
+                        reveal = centerFrame.maxX < sideFrame.minX + shouldOpenPercentage * sideFrame.width
+                    }else{
+                        // opening
+                        reveal = centerFrame.maxX < sideFrame.minX + shouldHidePercentage * sideFrame.width
+                    }
+                }
+                
+                animate(toReveal: reveal)
+            }
+        }
     }
 }
