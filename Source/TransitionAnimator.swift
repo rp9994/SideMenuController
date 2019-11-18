@@ -78,4 +78,3 @@ public struct CircleMaskAnimator: TransitionAnimatable {
         CATransaction.commit()
     }
 }
-© 2019 GitHub, Inc.
